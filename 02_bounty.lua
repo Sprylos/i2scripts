@@ -1,5 +1,4 @@
 -- functions
-local roundToNearest
 local findSafe
 local getBountyBuys
 local getDelta
@@ -20,6 +19,7 @@ local noFormatBountyBuys
 local bountyBuys = {}
 local bountyc = 0
 local bounties
+local coins
 local lastDelta = 10
 local LIGHT_GREEN = {}
 local GREY = {}
@@ -42,16 +42,10 @@ local uiVars = {
 
 
 
-dofile("scripts/utils/binder.lua")
-
--- rounds the integer n to the nearest integer divisible my m
-roundToNearest = function(n, m)
-    local r = n % m
-    if r + r >= m then return n + m - r else return n - r end
-end
+if bind == nil then dofile("scripts/utils/binder.lua") end
 
 -- euphos magic, find the true safe buy
-findSafe = function(i, buy, cost, coins)
+findSafe = function(i, buy, cost)
     local d = { buy }
     for g = 1, 5 do
         if d[g] == 0 then
@@ -76,34 +70,25 @@ findSafe = function(i, buy, cost, coins)
 end
 
 -- return the best timings to buy the bounties in a table.
-getBountyBuys = function(maxBounties, coins, difficulty)
+getBountyBuys = function()
     local rv = {}
-    if difficulty < 100 then difficulty = 100
-    elseif difficulty > 4500 then difficulty = 4500 end
-    local difSlope = 1 + ((difficulty - 100) / 200)
-    for i = 1, maxBounties do
-        local val = math.floor((difSlope) * (1.60000002384186 ^ (1.15 * (i - 1)) * 180))
+    local bountyModifierFactory = managers.ModifierManager:getFactory(enums.ModifierType.BOUNTY)
+    for i = 1, bounties do
         local cost, buy
-        if val < 500 then
-            cost = roundToNearest(val, 5)
-        elseif val < 5000 then
-            cost = roundToNearest(val, 10)
-        else
-            cost = roundToNearest(val, 50)
-        end
+        cost = bountyModifierFactory:getBuildPrice(SP, i - 1)
+
         if (cost * i) < (coins * 50) then
             buy = math.floor((math.ceil(cost * (i - 1) / 50) * 50) + cost)
         else
             buy = math.floor((math.ceil(coins * (i - 1) / i) * 50) + cost)
         end
-        rv[i] = findSafe(i, buy, cost, coins)
+        rv[i] = findSafe(i, buy, cost)
     end
-    rv[maxBounties + 1] = -1
+    rv[bounties + 1] = -1
     return rv
 end
 
--- System Listeners
-
+-- System listeners
 gameStateSystemListener = luajava.createProxy(GNS .. "systems.GameStateSystem$GameStateSystemListener", {
     -- ad the button in the pause menu
     gamePaused = function()
@@ -119,19 +104,21 @@ gameStateSystemListener = luajava.createProxy(GNS .. "systems.GameStateSystem$Ga
 
 gameValueSystemListener = luajava.createProxy(GNS .. "systems.GameValueSystem$GameValueSystemListener", {
     -- in case the bounty count GV changes (ie through a core), we need to recalculate the bounty buys
-    recalculated = function()
-        if tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_COUNT)) ~= bounties then
+    recalculated = function(oldValues)
+        if tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_COUNT)) ~= bounties or
+            tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_VALUE)) ~= coins then
+            -- calculate bounty buys
             bounties = tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_COUNT))
-            local coins = tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_VALUE))
-            local difficulty = tonumber(SP.gameState.averageDifficulty)
-            noFormatBountyBuys = getBountyBuys(bounties, coins, difficulty)
+            coins = tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_VALUE))
+            noFormatBountyBuys = getBountyBuys()
+            keepForMax = coins * 50
+
+            -- format bounty buys (ie "01 | 180")
             for i = 1, #noFormatBountyBuys - 1 do
                 local ix
                 if i < 10 then ix = '0' .. i else ix = i end
                 bountyBuys[i] = ix .. " | " .. noFormatBountyBuys[i]
             end
-            -- force recreation of the UI
-            bountyLabels = nil
             bountyGroup = nil
             updateUi()
         end
@@ -183,6 +170,7 @@ updateUi = function()
 
     -- if the UI is dead, recreate it
     if bountyGroup == nil or bountyLabels == nil then
+        uiLayer:getTable():clear()
         bountyGroup = luajava.new(Group)
         bountyLabels = {}
         assert(bountyGroup)
@@ -289,9 +277,8 @@ initialize = function()
 
         -- calculate bounty buys
         bounties = tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_COUNT))
-        local coins = tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_VALUE))
-        local difficulty = tonumber(SP.gameState.averageDifficulty)
-        noFormatBountyBuys = getBountyBuys(bounties, coins, difficulty)
+        coins = tonumber(SP.gameValue:getIntValue(enums.GameValueType.MODIFIER_BOUNTY_VALUE))
+        noFormatBountyBuys = getBountyBuys()
         keepForMax = coins * 50
 
         -- format bounty buys (ie "01 | 180")
